@@ -39,6 +39,9 @@ def compute_morgan_fingerprints(smiles_list):
 # Load dataset
 df = pd.read_csv('lipophilicity.csv')
 
+# Check for column names and strip any extra spaces
+df.columns = df.columns.str.strip()
+
 # Generate Morgan Fingerprints
 morgan_fps = compute_morgan_fingerprints(df['smiles'])
 

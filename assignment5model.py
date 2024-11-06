@@ -1,46 +1,82 @@
-import argparse
 import os
-from sklearn.metrics import mean_squared_error
-import numpy as np
+import sys
 import json
 import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import AllChem
-from sklearn.ensemble import RandomForestRegressor
-from math import sqrt
+from sklearn.model_selection import train_test_split
+from sklearn.neural_network import MLPRegressor
+from sklearn.metrics import mean_squared_error
+from sklearn.preprocessing import StandardScaler
+import numpy as np
 
-# Argument Parsing for Hyperparameters
-parser = argparse.ArgumentParser(description="Train a Morgan Fingerprint model")
-parser.add_argument('--radius', type=int, default=2, help="Radius for Morgan Fingerprints")
-parser.add_argument('--num_bits', type=int, default=2048, help="Number of bits for Morgan Fingerprints")
-args = parser.parse_args()
+# Function to parse hyperparameters from command-line or config file
+def parse_hyperparameters():
+    if len(sys.argv) > 2:
+        # Command-line arguments
+        hidden_layer_sizes = tuple(map(int, sys.argv[1].strip('()').split(',')))
+        max_iter = int(sys.argv[2])
+    else:
+        # Load hyperparameters from a JSON config file
+        with open('assignment5.json', 'r') as file:
+            config = json.load(file)
+            hidden_layer_sizes = tuple(config.get('hidden_layer_sizes', (100,)))
+            max_iter = config.get('max_iter', 1000)
+    return hidden_layer_sizes, max_iter
 
-with open('assignment5config.json', 'r') as f:
-    config = json.load(f)
-radius = config.get('radius', 2)
-num_bits = config.get('num_bits', 2048)
+# Function to compute Morgan Fingerprints
+def compute_morgan_fingerprints(smiles_list):
+    fingerprints = []
+    for smi in smiles_list:
+        mol = Chem.MolFromSmiles(smi)
+        if mol:
+            fp = AllChem.GetMorganFingerprintAsBitVect(mol, 2, nBits=2048)
+            fingerprints.append(np.array(fp))
+        else:
+            fingerprints.append(np.zeros((2048,)))  # Empty vector for invalid SMILES
+    return np.array(fingerprints)
 
-# Load Dataset
-data = pd.read_csv('data/lipophilicity.csv')
-smiles = data['smiles']
-y = data['exp']
+# Load dataset
+df = pd.read_csv('lipophilicity.csv')
 
 # Generate Morgan Fingerprints
-X = [AllChem.GetMorganFingerprintAsBitVect(Chem.MolFromSmiles(s), radius, num_bits) for s in smiles]
+morgan_fps = compute_morgan_fingerprints(df['smiles'])
 
-# Split data and Train model (for illustration)
-from sklearn.model_selection import train_test_split
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
-model = RandomForestRegressor()
-model.fit(X_train, y_train)
+# Split data into train and test sets
+X_train_morgan, X_test_morgan, y_train, y_test = train_test_split(morgan_fps, df['exp'], test_size=0.2, random_state=42)
+y_train = np.array(y_train).reshape(-1, 1)
+y_test = np.array(y_test).reshape(-1, 1)
 
-# Predictions and RMSE
-y_pred = model.predict(X_test)
-rmse = sqrt(mean_squared_error(y_test, y_pred))
+# Parse hyperparameters
+hidden_layer_sizes, max_iter = parse_hyperparameters()
 
-# Save Results
+# Initialize and train the MLPRegressor model
+mlp_morgan = MLPRegressor(hidden_layer_sizes=hidden_layer_sizes, max_iter=max_iter, random_state=42)
+
+# Scale the target
+scaler = StandardScaler()
+y_train_scaled = scaler.fit_transform(y_train).ravel()  # Keep target as 1D for training
+y_test_unscaled = y_test
+
+# Fit the model
+mlp_morgan.fit(X_train_morgan, y_train_scaled)
+
+# Make predictions and rescale to original target scale
+y_pred_morgan_scaled = mlp_morgan.predict(X_test_morgan)
+y_pred_morgan_unscaled = scaler.inverse_transform(y_pred_morgan_scaled.reshape(-1, 1))
+
+# Evaluate performance using RMSE
+rmse_morgan = np.sqrt(mean_squared_error(y_test_unscaled, y_pred_morgan_unscaled))
+print("RMSE for Morgan Fingerprints model:", rmse_morgan)
+
+# Get current conda environment
 conda_env = os.getenv("CONDA_DEFAULT_ENV")
-with open("results.txt", "w") as f:
-    f.write(f"Test RMSE: {rmse}\n")
-    f.write(f"Conda Environment: {conda_env}\n")
-    f.write(f"Hyperparameters: radius={radius}, num_bits={num_bits}\n")
+
+# Save results to a text file
+with open('model_results.txt', 'w') as result_file:
+    result_file.write(f"RMSE: {rmse_morgan}\n")
+    result_file.write(f"Conda Environment: {conda_env}\n")
+    result_file.write(f"Hyperparameters: hidden_layer_sizes={hidden_layer_sizes}, max_iter={max_iter}\n")
+
+# Print completion message
+print("Model training complete. Results saved to 'model_results.txt'.")
